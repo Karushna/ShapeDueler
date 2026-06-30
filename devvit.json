@@ -1,6 +1,6 @@
 {
   "$schema": "https://developers.reddit.com/schema/config-file.v1.json",
-  "name": "<% name %>",
+  "name": "shapedueler",
   "post": {
     "dir": "dist/client",
     "entrypoints": {
@@ -21,7 +21,7 @@
     "items": [
       {
         "label": "Create a new post",
-        "description": "<% name %>",
+        "description": "shapedueler",
         "location": "subreddit",
         "forUserType": "moderator",
         "endpoint": "/internal/menu/post-create"
@@ -44,5 +44,8 @@
   "scripts": {
     "build": "vite build",
     "dev": "vite build --watch"
+  },
+  "dev": {
+    "subreddit": "shapedueler_dev"
   }
 }
