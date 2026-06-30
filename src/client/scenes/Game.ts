@@ -1,161 +1,319 @@
-import { Scene } from 'phaser';
+import { Scene, GameObjects } from 'phaser';
 import * as Phaser from 'phaser';
-import { IncrementResponse, DecrementResponse, InitResponse } from '../../shared/api';
+import type { DailyResponse, GuessResponse, Shape, ShapeType } from '../../shared/api';
+
+function hexToNum(hex: string): number {
+  return parseInt(hex.replace('#', ''), 16);
+}
+
+function drawShape(
+  gfx: Phaser.GameObjects.Graphics,
+  type: ShapeType,
+  x: number,
+  y: number,
+  size: number
+): void {
+  switch (type) {
+    case 'circle':
+      gfx.fillCircle(x, y, size);
+      break;
+
+    case 'triangle': {
+      const h = size * Math.sqrt(3);
+      gfx.fillTriangle(
+        x, y - (h * 2) / 3,
+        x - size, y + h / 3,
+        x + size, y + h / 3
+      );
+      break;
+    }
+
+    case 'square':
+      gfx.fillRect(x - size, y - size, size * 2, size * 2);
+      break;
+
+    case 'pentagon':
+    case 'hexagon': {
+      const sides = type === 'pentagon' ? 5 : 6;
+      const pts: { x: number; y: number }[] = [];
+      for (let i = 0; i < sides; i++) {
+        const angle = (i / sides) * Math.PI * 2 - Math.PI / 2;
+        pts.push({ x: x + Math.cos(angle) * size, y: y + Math.sin(angle) * size });
+      }
+      gfx.fillPoints(pts, true);
+      break;
+    }
+
+    case 'star': {
+      const outerR = size;
+      const innerR = size * 0.4;
+      const pts: { x: number; y: number }[] = [];
+      for (let i = 0; i < 10; i++) {
+        const angle = (i / 10) * Math.PI * 2 - Math.PI / 2;
+        const r = i % 2 === 0 ? outerR : innerR;
+        pts.push({ x: x + Math.cos(angle) * r, y: y + Math.sin(angle) * r });
+      }
+      gfx.fillPoints(pts, true);
+      break;
+    }
+  }
+}
 
 export class Game extends Scene {
-  camera: Phaser.Cameras.Scene2D.Camera;
-  background: Phaser.GameObjects.Image;
-  msg_text: Phaser.GameObjects.Text;
-  count: number = 0;
-  countText: Phaser.GameObjects.Text;
-  incButton: Phaser.GameObjects.Text;
-  decButton: Phaser.GameObjects.Text;
-  goButton: Phaser.GameObjects.Text;
+  private shapes: [Shape, Shape] | null = null;
+  private questions: DailyResponse['questions'] | null = null;
+  private currentQuestion: number = 0;
+  private score: number = 0;
+  private answering: boolean = false;
+
+  private questionText: GameObjects.Text | null = null;
+  private progressText: GameObjects.Text | null = null;
+  private leftGfx: Phaser.GameObjects.Graphics | null = null;
+  private rightGfx: Phaser.GameObjects.Graphics | null = null;
+  private leftLabel: GameObjects.Text | null = null;
+  private rightLabel: GameObjects.Text | null = null;
+  private leftZone: GameObjects.Zone | null = null;
+  private rightZone: GameObjects.Zone | null = null;
+  private feedbackBg: GameObjects.Rectangle | null = null;
+  private feedbackText: GameObjects.Text | null = null;
 
   constructor() {
     super('Game');
   }
 
-  create() {
-    // Configure camera & background
-    this.camera = this.cameras.main;
-    this.camera.setBackgroundColor(0x222222);
+  init(): void {
+    this.shapes = null;
+    this.questions = null;
+    this.currentQuestion = 0;
+    this.score = 0;
+    this.answering = false;
+    this.questionText = null;
+    this.progressText = null;
+    this.leftGfx = null;
+    this.rightGfx = null;
+    this.leftLabel = null;
+    this.rightLabel = null;
+    this.leftZone = null;
+    this.rightZone = null;
+    this.feedbackBg = null;
+    this.feedbackText = null;
+  }
 
-    // Optional: semi-transparent background image if one has been loaded elsewhere
-    this.background = this.add.image(512, 384, 'background').setAlpha(0.25);
+  create(): void {
+    this.cameras.main.setBackgroundColor(0x1a1a2e);
+    void this.loadDaily();
+  }
 
-    /* -------------------------------------------
-     *  UI Elements
-     * ------------------------------------------- */
+  private async loadDaily(): Promise<void> {
+    try {
+      const res = await fetch('/api/daily');
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = (await res.json()) as DailyResponse;
 
-    // Display the current count
-    this.countText = this.add
-      .text(512, 340, `Count: ${this.count}`, {
+      if (data.alreadyPlayed) {
+        this.showAlreadyPlayed(data.score);
+        return;
+      }
+
+      this.shapes = data.shapes;
+      this.questions = data.questions;
+      this.currentQuestion = data.guessesUsed;
+      this.score = data.score;
+      this.buildUI();
+    } catch (e) {
+      console.error('Failed to load daily data:', e);
+      this.showError();
+    }
+  }
+
+  private buildUI(): void {
+    const { width, height } = this.scale;
+    const shapeY = height * 0.52;
+    const shapeSize = Math.min(width * 0.18, height * 0.22, 90);
+
+    this.questionText = this.add
+      .text(width / 2, height * 0.1, this.questions![this.currentQuestion].label, {
         fontFamily: 'Arial Black',
-        fontSize: 56,
-        color: '#ffd700',
+        fontSize: '26px',
+        color: '#ffffff',
         stroke: '#000000',
-        strokeThickness: 10,
+        strokeThickness: 5,
+        align: 'center',
+        wordWrap: { width: width * 0.88 },
       })
       .setOrigin(0.5);
 
-    // Fetch the initial counter value from server and update UI
-    void (async () => {
-      try {
-        const response = await fetch('/api/init');
-        if (!response.ok) throw new Error(`API error: ${response.status}`);
+    this.progressText = this.add
+      .text(width / 2, height * 0.2, `Question ${this.currentQuestion + 1} of 3`, {
+        fontFamily: 'Arial',
+        fontSize: '16px',
+        color: '#aaaaaa',
+      })
+      .setOrigin(0.5);
 
-        const data = (await response.json()) as InitResponse;
-        this.count = data.count;
-        this.updateCountText();
-      } catch (error) {
-        console.error('Failed to fetch initial count:', error);
-      }
-    })();
+    // Divider line
+    const div = this.add.graphics();
+    div.lineStyle(2, 0x444466, 1);
+    div.lineBetween(width / 2, height * 0.25, width / 2, height * 0.8);
 
-    // Button styling helper
-    const createButton = (y: number, label: string, color: string, onClick: () => void) => {
-      const button = this.add
-        .text(512, y, label, {
-          fontFamily: 'Arial Black',
-          fontSize: 36,
-          color: color,
-          backgroundColor: '#444444',
-          padding: {
-            x: 25,
-            y: 12,
-          } as Phaser.Types.GameObjects.Text.TextPadding,
-        })
-        .setOrigin(0.5)
-        .setInteractive({ useHandCursor: true })
-        .on('pointerover', () => button.setStyle({ backgroundColor: '#555555' }))
-        .on('pointerout', () => button.setStyle({ backgroundColor: '#444444' }))
-        .on('pointerdown', onClick);
-      return button;
-    };
+    // Left shape
+    this.leftGfx = this.add.graphics();
+    this.leftGfx.fillStyle(hexToNum(this.shapes![0].color), 1);
+    drawShape(this.leftGfx, this.shapes![0].type, width * 0.25, shapeY, shapeSize);
 
-    // Increment button
-    this.incButton = createButton(this.scale.height * 0.55, 'Increment', '#00ff00', async () => {
-      try {
-        const response = await fetch('/api/increment', { method: 'POST' });
-        if (!response.ok) throw new Error(`API error: ${response.status}`);
+    this.leftLabel = this.add
+      .text(width * 0.25, shapeY + shapeSize + 18, this.shapes![0].type.toUpperCase(), {
+        fontFamily: 'Arial Black',
+        fontSize: '14px',
+        color: '#cccccc',
+      })
+      .setOrigin(0.5);
 
-        const data = (await response.json()) as IncrementResponse;
-        this.count = data.count;
-        this.updateCountText();
-      } catch (error) {
-        console.error('Failed to increment count:', error);
-      }
-    });
+    // Right shape
+    this.rightGfx = this.add.graphics();
+    this.rightGfx.fillStyle(hexToNum(this.shapes![1].color), 1);
+    drawShape(this.rightGfx, this.shapes![1].type, width * 0.75, shapeY, shapeSize);
 
-    // Decrement button
-    this.decButton = createButton(this.scale.height * 0.65, 'Decrement', '#ff5555', async () => {
-      try {
-        const response = await fetch('/api/decrement', { method: 'POST' });
-        if (!response.ok) throw new Error(`API error: ${response.status}`);
+    this.rightLabel = this.add
+      .text(width * 0.75, shapeY + shapeSize + 18, this.shapes![1].type.toUpperCase(), {
+        fontFamily: 'Arial Black',
+        fontSize: '14px',
+        color: '#cccccc',
+      })
+      .setOrigin(0.5);
 
-        const data = (await response.json()) as DecrementResponse;
-        this.count = data.count;
-        this.updateCountText();
-      } catch (error) {
-        console.error('Failed to decrement count:', error);
-      }
-    });
+    // Tap hint
+    this.add
+      .text(width / 2, height * 0.88, 'Tap a shape to choose it', {
+        fontFamily: 'Arial',
+        fontSize: '14px',
+        color: '#666688',
+      })
+      .setOrigin(0.5);
 
-    // Game Over button – navigates to the GameOver scene
-    this.goButton = createButton(this.scale.height * 0.75, 'Game Over', '#ffffff', () => {
-      this.scene.start('GameOver');
-    });
+    // Click zones
+    this.leftZone = this.add
+      .zone(width * 0.25, height * 0.55, width * 0.5, height * 0.6)
+      .setInteractive({ useHandCursor: true })
+      .on('pointerdown', () => void this.handleGuess('left'));
 
-    // Setup responsive layout
-    this.updateLayout(this.scale.width, this.scale.height);
-    this.scale.on('resize', (gameSize: Phaser.Structs.Size) => {
-      const { width, height } = gameSize;
-      this.updateLayout(width, height);
-    });
+    this.rightZone = this.add
+      .zone(width * 0.75, height * 0.55, width * 0.5, height * 0.6)
+      .setInteractive({ useHandCursor: true })
+      .on('pointerdown', () => void this.handleGuess('right'));
 
-    // No automatic navigation to GameOver – users can stay in this scene.
+    // Hover highlights
+    const leftHighlight = this.add.rectangle(width * 0.25, height * 0.55, width * 0.48, height * 0.58, 0xffffff, 0).setDepth(-1);
+    const rightHighlight = this.add.rectangle(width * 0.75, height * 0.55, width * 0.48, height * 0.58, 0xffffff, 0).setDepth(-1);
+    this.leftZone
+      .on('pointerover', () => leftHighlight.setFillStyle(0xffffff, 0.05))
+      .on('pointerout', () => leftHighlight.setFillStyle(0xffffff, 0));
+    this.rightZone
+      .on('pointerover', () => rightHighlight.setFillStyle(0xffffff, 0.05))
+      .on('pointerout', () => rightHighlight.setFillStyle(0xffffff, 0));
+
+    // Feedback overlay (hidden)
+    this.feedbackBg = this.add
+      .rectangle(width / 2, height / 2, width, height, 0x000000, 0)
+      .setVisible(false)
+      .setDepth(10);
+    this.feedbackText = this.add
+      .text(width / 2, height / 2, '', {
+        fontFamily: 'Arial Black',
+        fontSize: '72px',
+        color: '#ffffff',
+        stroke: '#000000',
+        strokeThickness: 8,
+        align: 'center',
+      })
+      .setOrigin(0.5)
+      .setVisible(false)
+      .setDepth(11);
   }
 
-  updateLayout(width: number, height: number) {
-    // Resize camera viewport to avoid black bars
-    this.cameras.resize(width, height);
+  private async handleGuess(choice: 'left' | 'right'): Promise<void> {
+    if (this.answering || !this.questions) return;
+    this.answering = true;
 
-    // Center and scale background image to cover screen
-    if (this.background) {
-      this.background.setPosition(width / 2, height / 2);
-      if (this.background.width && this.background.height) {
-        const scale = Math.max(width / this.background.width, height / this.background.height);
-        this.background.setScale(scale);
-      }
-    }
+    this.leftZone?.disableInteractive();
+    this.rightZone?.disableInteractive();
 
-    // Calculate a scale factor relative to a 1024 × 768 reference resolution.
-    // We only shrink on smaller screens – never enlarge above 1×.
-    const scaleFactor = Math.min(Math.min(width / 1024, height / 768), 1);
+    try {
+      const res = await fetch('/api/guess', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ questionIndex: this.currentQuestion, choice }),
+      });
+      const data = (await res.json()) as GuessResponse;
+      this.score = data.score;
 
-    if (this.countText) {
-      this.countText.setPosition(width / 2, height * 0.45);
-      this.countText.setScale(scaleFactor);
-    }
-
-    if (this.incButton) {
-      this.incButton.setPosition(width / 2, height * 0.55);
-      this.incButton.setScale(scaleFactor);
-    }
-
-    if (this.decButton) {
-      this.decButton.setPosition(width / 2, height * 0.65);
-      this.decButton.setScale(scaleFactor);
-    }
-
-    if (this.goButton) {
-      this.goButton.setPosition(width / 2, height * 0.75);
-      this.goButton.setScale(scaleFactor);
+      this.showFeedback(data.correct, () => {
+        if (data.done) {
+          this.scene.start('GameOver', { score: data.score, streak: data.streak });
+        } else {
+          this.currentQuestion++;
+          this.questionText?.setText(this.questions![this.currentQuestion].label);
+          this.progressText?.setText(`Question ${this.currentQuestion + 1} of 3`);
+          this.leftZone?.setInteractive({ useHandCursor: true });
+          this.rightZone?.setInteractive({ useHandCursor: true });
+          this.answering = false;
+        }
+      });
+    } catch (e) {
+      console.error('Guess error:', e);
+      this.answering = false;
+      this.leftZone?.setInteractive({ useHandCursor: true });
+      this.rightZone?.setInteractive({ useHandCursor: true });
     }
   }
 
-  updateCountText() {
-    this.countText.setText(`Count: ${this.count}`);
+  private showFeedback(correct: boolean, onDone: () => void): void {
+    if (!this.feedbackBg || !this.feedbackText) return;
+
+    this.feedbackBg
+      .setFillStyle(correct ? 0x004400 : 0x440000, 0.85)
+      .setVisible(true);
+    this.feedbackText
+      .setText(correct ? '✓  Correct!' : '✗  Wrong!')
+      .setColor(correct ? '#00ff88' : '#ff4444')
+      .setVisible(true);
+
+    this.time.delayedCall(1100, () => {
+      this.feedbackBg?.setVisible(false);
+      this.feedbackText?.setVisible(false);
+      onDone();
+    });
+  }
+
+  private showAlreadyPlayed(score: number): void {
+    const { width, height } = this.scale;
+    this.add
+      .text(width / 2, height * 0.3, "You've already played today!", {
+        fontFamily: 'Arial Black', fontSize: '28px', color: '#ffffff',
+        align: 'center', wordWrap: { width: width * 0.85 },
+      })
+      .setOrigin(0.5);
+    this.add
+      .text(width / 2, height * 0.48, `Your score: ${score}/3`, {
+        fontFamily: 'Arial Black', fontSize: '52px', color: '#ffd700',
+      })
+      .setOrigin(0.5);
+    this.add
+      .text(width / 2, height * 0.62, 'Come back tomorrow!', {
+        fontFamily: 'Arial', fontSize: '20px', color: '#aaaaaa',
+      })
+      .setOrigin(0.5);
+
+    this.time.delayedCall(3000, () => this.scene.start('MainMenu'));
+  }
+
+  private showError(): void {
+    const { width, height } = this.scale;
+    this.add
+      .text(width / 2, height / 2, 'Failed to load.\nPlease try again.', {
+        fontFamily: 'Arial Black', fontSize: '28px', color: '#ff4444',
+        align: 'center',
+      })
+      .setOrigin(0.5);
   }
 }

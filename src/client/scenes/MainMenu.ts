@@ -1,75 +1,156 @@
 import { Scene, GameObjects } from 'phaser';
+import type { StreakResponse, LeaderboardResponse } from '../../shared/api';
 
 export class MainMenu extends Scene {
-  background: GameObjects.Image | null = null;
-  logo: GameObjects.Image | null = null;
-  title: GameObjects.Text | null = null;
+  private titleText: GameObjects.Text | null = null;
+  private dateText: GameObjects.Text | null = null;
+  private streakText: GameObjects.Text | null = null;
+  private leaderboardTexts: GameObjects.Text[] = [];
+  private playButton: GameObjects.Text | null = null;
+  private statusText: GameObjects.Text | null = null;
 
   constructor() {
     super('MainMenu');
   }
 
-  /**
-   * Reset cached GameObject references every time the scene starts.
-   * The same Scene instance is reused by Phaser, so we must ensure
-   * stale (destroyed) objects are cleared out when the scene restarts.
-   */
   init(): void {
-    this.background = null;
-    this.logo = null;
-    this.title = null;
+    this.titleText = null;
+    this.dateText = null;
+    this.streakText = null;
+    this.leaderboardTexts = [];
+    this.playButton = null;
+    this.statusText = null;
   }
 
   create() {
-    this.refreshLayout();
-
-    // Re-calculate positions whenever the game canvas is resized (e.g. orientation change).
-    this.scale.on('resize', () => this.refreshLayout());
-
-    this.input.once('pointerdown', () => {
-      this.scene.start('Game');
-    });
-  }
-
-  /**
-   * Positions and (lightly) scales all UI elements based on the current game size.
-   * Call this from create() and from any resize events.
-   */
-  private refreshLayout(): void {
+    this.cameras.main.setBackgroundColor(0x1a1a2e);
     const { width, height } = this.scale;
 
-    // Resize camera to new viewport to prevent black bars
-    this.cameras.resize(width, height);
+    this.titleText = this.add
+      .text(width / 2, height * 0.1, 'Daily Shape Dueler', {
+        fontFamily: 'Arial Black',
+        fontSize: '36px',
+        color: '#ffffff',
+        stroke: '#000000',
+        strokeThickness: 6,
+        align: 'center',
+      })
+      .setOrigin(0.5);
 
-    // Background – stretch to fill the whole canvas
-    if (!this.background) {
-      this.background = this.add.image(0, 0, 'background').setOrigin(0);
-    }
-    this.background!.setDisplaySize(width, height);
+    const today = new Date().toLocaleDateString('en-US', {
+      weekday: 'long', month: 'long', day: 'numeric',
+    });
+    this.dateText = this.add
+      .text(width / 2, height * 0.19, today, {
+        fontFamily: 'Arial',
+        fontSize: '18px',
+        color: '#aaaaaa',
+      })
+      .setOrigin(0.5);
 
-    // Logo – keep aspect but scale down for very small screens
-    const scaleFactor = Math.min(width / 1024, height / 768);
+    this.streakText = this.add
+      .text(width / 2, height * 0.28, 'Loading...', {
+        fontFamily: 'Arial Black',
+        fontSize: '22px',
+        color: '#f39c12',
+      })
+      .setOrigin(0.5);
 
-    if (!this.logo) {
-      this.logo = this.add.image(0, 0, 'logo');
-    }
-    this.logo!.setPosition(width / 2, height * 0.38).setScale(scaleFactor);
+    this.statusText = this.add
+      .text(width / 2, height * 0.36, '', {
+        fontFamily: 'Arial',
+        fontSize: '16px',
+        color: '#aaaaaa',
+        align: 'center',
+      })
+      .setOrigin(0.5);
 
-    // Title text – create once, then scale on resize
-    const baseFontSize = 38;
-    if (!this.title) {
-      this.title = this.add
-        .text(0, 0, 'Main Menu', {
-          fontFamily: 'Arial Black',
-          fontSize: `${baseFontSize}px`,
-          color: '#ffffff',
-          stroke: '#000000',
-          strokeThickness: 8,
-          align: 'center',
+    // Leaderboard header
+    this.add
+      .text(width / 2, height * 0.46, 'THIS WEEK\'S TOP PLAYERS', {
+        fontFamily: 'Arial Black',
+        fontSize: '14px',
+        color: '#888888',
+        letterSpacing: 2,
+      })
+      .setOrigin(0.5);
+
+    // Placeholder leaderboard rows
+    for (let i = 0; i < 3; i++) {
+      const t = this.add
+        .text(width / 2, height * 0.53 + i * height * 0.07, '—', {
+          fontFamily: 'Arial',
+          fontSize: '16px',
+          color: '#cccccc',
         })
         .setOrigin(0.5);
+      this.leaderboardTexts.push(t);
     }
-    this.title!.setPosition(width / 2, height * 0.6);
-    this.title!.setScale(scaleFactor);
+
+    this.playButton = this.add
+      .text(width / 2, height * 0.82, "▶  Play Today's Challenge", {
+        fontFamily: 'Arial Black',
+        fontSize: '24px',
+        color: '#ffffff',
+        backgroundColor: '#d93900',
+        padding: { x: 24, y: 14 },
+      })
+      .setOrigin(0.5)
+      .setInteractive({ useHandCursor: true })
+      .on('pointerover', () => this.playButton!.setStyle({ backgroundColor: '#ff4500' }))
+      .on('pointerout', () => this.playButton!.setStyle({ backgroundColor: '#d93900' }))
+      .on('pointerdown', () => this.scene.start('Game'));
+
+    void this.loadData();
+
+    this.scale.on('resize', () => this.refreshLayout());
+  }
+
+  private async loadData(): Promise<void> {
+    try {
+      const [streakRes, lbRes] = await Promise.all([
+        fetch('/api/streak').then((r) => r.json() as Promise<StreakResponse>),
+        fetch('/api/leaderboard').then((r) => r.json() as Promise<LeaderboardResponse>),
+      ]);
+
+      if (this.streakText) {
+        const s = streakRes.streak;
+        this.streakText.setText(s > 0 ? `🔥 ${s}-day streak!` : 'No active streak — play today!');
+      }
+
+      const today = new Date().toISOString().slice(0, 10);
+      if (this.statusText && streakRes.lastPlayed === today) {
+        this.statusText.setText('You already played today. Come back tomorrow!');
+        if (this.playButton) {
+          this.playButton.setAlpha(0.5).disableInteractive();
+          this.playButton.setText('Already Played Today');
+        }
+      }
+
+      lbRes.entries.slice(0, 3).forEach((entry, i) => {
+        const medal = ['🥇', '🥈', '🥉'][i];
+        if (this.leaderboardTexts[i]) {
+          this.leaderboardTexts[i].setText(`${medal}  ${entry.username}  —  ${entry.score} pts`);
+        }
+      });
+
+      if (lbRes.entries.length === 0 && this.leaderboardTexts[0]) {
+        this.leaderboardTexts[0].setText('No players yet this week!');
+      }
+    } catch (e) {
+      console.error('MainMenu loadData error:', e);
+      if (this.streakText) this.streakText.setText('');
+    }
+  }
+
+  private refreshLayout(): void {
+    const { width, height } = this.scale;
+    this.cameras.resize(width, height);
+    this.titleText?.setPosition(width / 2, height * 0.1);
+    this.dateText?.setPosition(width / 2, height * 0.19);
+    this.streakText?.setPosition(width / 2, height * 0.28);
+    this.statusText?.setPosition(width / 2, height * 0.36);
+    this.playButton?.setPosition(width / 2, height * 0.82);
+    this.leaderboardTexts.forEach((t, i) => t.setPosition(width / 2, height * 0.53 + i * height * 0.07));
   }
 }
