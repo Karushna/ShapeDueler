@@ -156,10 +156,6 @@ export class Game extends Scene {
       })
       .setOrigin(0.5);
 
-    const div = this.add.graphics();
-    div.lineStyle(2, 0x444466, 1);
-    div.lineBetween(width / 2, height * 0.25, width / 2, height * 0.8);
-
     this.add
       .text(width / 2, height * 0.88, 'Tap a shape to choose it', {
         fontFamily: 'Arial',
