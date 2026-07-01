@@ -1,5 +1,6 @@
 import { redis } from '@devvit/web/server';
-import type { Shape, ShapeType, Question, Property } from '../../shared/api';
+import type { DailyLevel, Shape, ShapeType, Question, Property } from '../../shared/api';
+import { LEVEL_SHAPE_COUNTS, QUESTIONS_PER_LEVEL } from '../../shared/api';
 
 function seededRandom(seed: number): () => number {
   let s = seed | 0;
@@ -21,7 +22,6 @@ function computeProperties(type: ShapeType, size: number): Record<Property, numb
         perimeter: 2 * Math.PI * size,
       };
     case 'triangle': {
-      // Equilateral triangle drawn with half-base = size
       const side = 2 * size;
       return {
         sides: 3,
@@ -30,7 +30,6 @@ function computeProperties(type: ShapeType, size: number): Record<Property, numb
       };
     }
     case 'square': {
-      // Square drawn with half-side = size
       const side = 2 * size;
       return {
         sides: 4,
@@ -39,7 +38,6 @@ function computeProperties(type: ShapeType, size: number): Record<Property, numb
       };
     }
     case 'pentagon': {
-      // Regular pentagon, circumradius = size
       const s = 2 * size * Math.sin(Math.PI / 5);
       return {
         sides: 5,
@@ -48,7 +46,6 @@ function computeProperties(type: ShapeType, size: number): Record<Property, numb
       };
     }
     case 'hexagon': {
-      // Regular hexagon, circumradius = size (side = circumradius)
       const side = size;
       return {
         sides: 6,
@@ -57,15 +54,13 @@ function computeProperties(type: ShapeType, size: number): Record<Property, numb
       };
     }
     case 'star': {
-      // 5-pointed star, outer radius = size, inner radius = size * 0.4
       const outerR = size;
       const innerR = size * 0.4;
       const angle = (2 * Math.PI) / 10;
       const edgeLen = Math.sqrt(
         outerR * outerR + innerR * innerR - 2 * outerR * innerR * Math.cos(angle)
       );
-      // Area approximation using shoelace on alternating outer/inner vertices
-      const area = (5 / 2) * Math.sin(4 * Math.PI / 5) * (outerR * outerR - innerR * innerR);
+      const area = (5 / 2) * Math.sin((4 * Math.PI) / 5) * (outerR * outerR - innerR * innerR);
       return {
         sides: 10,
         area,
@@ -82,8 +77,7 @@ const PROPERTY_LABELS: Record<Property, string> = {
 };
 
 export type DailyData = {
-  shapes: [Shape, Shape];
-  questions: Question[];
+  levels: DailyLevel[];
 };
 
 export function getDateKey(date: Date): string {
@@ -99,47 +93,76 @@ export function getWeekKey(date: Date): string {
   return `${year}-W${String(week).padStart(2, '0')}`;
 }
 
+function pickShape(rng: () => number, usedSignatures: Set<string>, usedTypes: Set<ShapeType>): Shape {
+  for (let attempts = 0; attempts < 200; attempts++) {
+    const type = SHAPE_TYPES[Math.floor(rng() * SHAPE_TYPES.length)];
+    if (!type) continue;
+    if (usedTypes.has(type)) continue;
+
+    const color = COLORS[Math.floor(rng() * COLORS.length)];
+    if (!color) continue;
+    const size = 40 + Math.floor(rng() * 60);
+    const signature = `${type}:${size}:${color}`;
+
+    if (usedSignatures.has(signature)) continue;
+
+    usedSignatures.add(signature);
+    usedTypes.add(type);
+    return { type, size, color };
+  }
+
+  throw new Error('Unable to generate a unique shape');
+}
+
+function buildLevel(rng: () => number, shapeCount: number, usedSignatures: Set<string>): DailyLevel {
+  const properties: Property[] = ['sides', 'area', 'perimeter'];
+
+  const questions: Question[] = properties.map((property) => {
+    const usedTypes = new Set<ShapeType>();
+    const shapes: Shape[] = [];
+    for (let i = 0; i < shapeCount; i++) {
+      shapes.push(pickShape(rng, usedSignatures, usedTypes));
+    }
+
+    let answerIndex = 0;
+    let bestValue = -Infinity;
+    shapes.forEach((shape, index) => {
+      const value = computeProperties(shape.type, shape.size)[property];
+      if (value > bestValue) {
+        bestValue = value;
+        answerIndex = index;
+      }
+    });
+
+    return { property, label: PROPERTY_LABELS[property], answerIndex, shapes };
+  });
+
+  return { questions };
+}
+
 export async function getDailyData(date: string): Promise<DailyData> {
-  const cacheKey = `daily:${date}`;
+  const cacheKey = `daily:v2:${date}`;
   const cached = await redis.get(cacheKey);
   if (cached) return JSON.parse(cached) as DailyData;
 
   const seed = parseInt(date.replace(/-/g, ''), 10);
   const rng = seededRandom(seed);
+  const usedSignatures = new Set<string>();
 
-  const pickShape = (): Shape => {
-    const type = SHAPE_TYPES[Math.floor(rng() * SHAPE_TYPES.length)];
-    const color = COLORS[Math.floor(rng() * COLORS.length)];
-    const size = 40 + Math.floor(rng() * 60);
-    return { type, size, color };
-  };
+  const levels = LEVEL_SHAPE_COUNTS.map((shapeCount) => buildLevel(rng, shapeCount, usedSignatures));
+  const data: DailyData = { levels };
 
-  let left = pickShape();
-  let right = pickShape();
-  while (right.type === left.type) {
-    right = pickShape();
-  }
-
-  const shapes: [Shape, Shape] = [left, right];
-
-  const properties: Property[] = ['sides', 'area', 'perimeter'];
-  const questions: Question[] = properties.map((property) => {
-    const lVal = computeProperties(left.type, left.size)[property];
-    const rVal = computeProperties(right.type, right.size)[property];
-    const answer: 'left' | 'right' = lVal >= rVal ? 'left' : 'right';
-    return { property, label: PROPERTY_LABELS[property], answer };
-  });
-
-  const data: DailyData = { shapes, questions };
   await redis.set(cacheKey, JSON.stringify(data));
-
   return data;
 }
 
-export async function getCorrectAnswer(
-  date: string,
-  questionIndex: number
-): Promise<'left' | 'right'> {
+export async function getCorrectAnswer(date: string, questionIndex: number): Promise<number> {
   const data = await getDailyData(date);
-  return data.questions[questionIndex].answer;
+  const levelIndex = Math.floor(questionIndex / QUESTIONS_PER_LEVEL);
+  const questionInLevel = questionIndex % QUESTIONS_PER_LEVEL;
+  const level = data.levels[levelIndex];
+  if (!level) throw new Error('Invalid question index');
+  const question = level.questions[questionInLevel];
+  if (!question) throw new Error('Invalid question index');
+  return question.answerIndex;
 }

@@ -1,6 +1,7 @@
 import { Scene, GameObjects } from 'phaser';
 import * as Phaser from 'phaser';
-import type { DailyResponse, GuessResponse, Shape, ShapeType } from '../../shared/api';
+import type { DailyResponse, GuessResponse, ShapeType } from '../../shared/api';
+import { TOTAL_QUESTIONS } from '../../shared/api';
 
 function hexToNum(hex: string): number {
   return parseInt(hex.replace('#', ''), 16);
@@ -17,41 +18,40 @@ function drawShape(
     case 'circle':
       gfx.fillCircle(x, y, size);
       break;
-
     case 'triangle': {
       const h = size * Math.sqrt(3);
       gfx.fillTriangle(
-        x, y - (h * 2) / 3,
-        x - size, y + h / 3,
-        x + size, y + h / 3
+        x,
+        y - (h * 2) / 3,
+        x - size,
+        y + h / 3,
+        x + size,
+        y + h / 3
       );
       break;
     }
-
     case 'square':
       gfx.fillRect(x - size, y - size, size * 2, size * 2);
       break;
-
     case 'pentagon':
     case 'hexagon': {
       const sides = type === 'pentagon' ? 5 : 6;
-      const pts: { x: number; y: number }[] = [];
+      const pts: Phaser.Math.Vector2[] = [];
       for (let i = 0; i < sides; i++) {
         const angle = (i / sides) * Math.PI * 2 - Math.PI / 2;
-        pts.push({ x: x + Math.cos(angle) * size, y: y + Math.sin(angle) * size });
+        pts.push(new Phaser.Math.Vector2(x + Math.cos(angle) * size, y + Math.sin(angle) * size));
       }
       gfx.fillPoints(pts, true);
       break;
     }
-
     case 'star': {
       const outerR = size;
       const innerR = size * 0.4;
-      const pts: { x: number; y: number }[] = [];
+      const pts: Phaser.Math.Vector2[] = [];
       for (let i = 0; i < 10; i++) {
         const angle = (i / 10) * Math.PI * 2 - Math.PI / 2;
         const r = i % 2 === 0 ? outerR : innerR;
-        pts.push({ x: x + Math.cos(angle) * r, y: y + Math.sin(angle) * r });
+        pts.push(new Phaser.Math.Vector2(x + Math.cos(angle) * r, y + Math.sin(angle) * r));
       }
       gfx.fillPoints(pts, true);
       break;
@@ -59,50 +59,62 @@ function drawShape(
   }
 }
 
+type ShapeSlot = {
+  zone: GameObjects.Zone;
+  highlight: GameObjects.Rectangle;
+  gfx: Phaser.GameObjects.Graphics;
+  label: GameObjects.Text;
+};
+
+type QuestionLocation = {
+  levelIndex: number;
+  questionIndex: number;
+};
+
 export class Game extends Scene {
-  private shapes: [Shape, Shape] | null = null;
-  private questions: DailyResponse['questions'] | null = null;
-  private currentQuestion: number = 0;
-  private score: number = 0;
-  private answering: boolean = false;
+  private levels: DailyResponse['levels'] | null = null;
+  private currentQuestion = 0;
+  private currentLevelIndex = 0;
+  private answering = false;
 
   private questionText: GameObjects.Text | null = null;
   private progressText: GameObjects.Text | null = null;
-  private leftGfx: Phaser.GameObjects.Graphics | null = null;
-  private rightGfx: Phaser.GameObjects.Graphics | null = null;
-  private leftLabel: GameObjects.Text | null = null;
-  private rightLabel: GameObjects.Text | null = null;
-  private leftZone: GameObjects.Zone | null = null;
-  private rightZone: GameObjects.Zone | null = null;
   private feedbackBg: GameObjects.Rectangle | null = null;
   private feedbackText: GameObjects.Text | null = null;
+
+  private shapeSlots: ShapeSlot[] = [];
 
   constructor() {
     super('Game');
   }
 
   init(): void {
-    this.shapes = null;
-    this.questions = null;
+    this.levels = null;
     this.currentQuestion = 0;
-    this.score = 0;
+    this.currentLevelIndex = 0;
     this.answering = false;
     this.questionText = null;
     this.progressText = null;
-    this.leftGfx = null;
-    this.rightGfx = null;
-    this.leftLabel = null;
-    this.rightLabel = null;
-    this.leftZone = null;
-    this.rightZone = null;
     this.feedbackBg = null;
     this.feedbackText = null;
+    this.shapeSlots = [];
   }
 
   create(): void {
     this.cameras.main.setBackgroundColor(0x1a1a2e);
+    this.scale.on('resize', this.handleResize);
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+      this.scale.off('resize', this.handleResize);
+    });
     void this.loadDaily();
   }
+
+  private handleResize = (gameSize: Phaser.Structs.Size): void => {
+    this.cameras.resize(gameSize.width, gameSize.height);
+    if (this.levels) {
+      this.renderCurrentState();
+    }
+  };
 
   private async loadDaily(): Promise<void> {
     try {
@@ -110,16 +122,11 @@ export class Game extends Scene {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = (await res.json()) as DailyResponse;
 
-      if (data.alreadyPlayed) {
-        this.showAlreadyPlayed(data.score);
-        return;
-      }
-
-      this.shapes = data.shapes;
-      this.questions = data.questions;
+      this.levels = data.levels;
       this.currentQuestion = data.guessesUsed;
-      this.score = data.score;
+      this.currentLevelIndex = this.getQuestionLocation(this.currentQuestion)?.levelIndex ?? 0;
       this.buildUI();
+      this.renderCurrentState();
     } catch (e) {
       console.error('Failed to load daily data:', e);
       this.showError();
@@ -128,11 +135,9 @@ export class Game extends Scene {
 
   private buildUI(): void {
     const { width, height } = this.scale;
-    const shapeY = height * 0.52;
-    const shapeSize = Math.min(width * 0.18, height * 0.22, 90);
 
     this.questionText = this.add
-      .text(width / 2, height * 0.1, this.questions![this.currentQuestion].label, {
+      .text(width / 2, height * 0.1, '', {
         fontFamily: 'Arial Black',
         fontSize: '26px',
         color: '#ffffff',
@@ -144,45 +149,17 @@ export class Game extends Scene {
       .setOrigin(0.5);
 
     this.progressText = this.add
-      .text(width / 2, height * 0.2, `Question ${this.currentQuestion + 1} of 3`, {
+      .text(width / 2, height * 0.2, '', {
         fontFamily: 'Arial',
         fontSize: '16px',
         color: '#aaaaaa',
       })
       .setOrigin(0.5);
 
-    // Divider line
     const div = this.add.graphics();
     div.lineStyle(2, 0x444466, 1);
     div.lineBetween(width / 2, height * 0.25, width / 2, height * 0.8);
 
-    // Left shape
-    this.leftGfx = this.add.graphics();
-    this.leftGfx.fillStyle(hexToNum(this.shapes![0].color), 1);
-    drawShape(this.leftGfx, this.shapes![0].type, width * 0.25, shapeY, shapeSize);
-
-    this.leftLabel = this.add
-      .text(width * 0.25, shapeY + shapeSize + 18, this.shapes![0].type.toUpperCase(), {
-        fontFamily: 'Arial Black',
-        fontSize: '14px',
-        color: '#cccccc',
-      })
-      .setOrigin(0.5);
-
-    // Right shape
-    this.rightGfx = this.add.graphics();
-    this.rightGfx.fillStyle(hexToNum(this.shapes![1].color), 1);
-    drawShape(this.rightGfx, this.shapes![1].type, width * 0.75, shapeY, shapeSize);
-
-    this.rightLabel = this.add
-      .text(width * 0.75, shapeY + shapeSize + 18, this.shapes![1].type.toUpperCase(), {
-        fontFamily: 'Arial Black',
-        fontSize: '14px',
-        color: '#cccccc',
-      })
-      .setOrigin(0.5);
-
-    // Tap hint
     this.add
       .text(width / 2, height * 0.88, 'Tap a shape to choose it', {
         fontFamily: 'Arial',
@@ -191,28 +168,6 @@ export class Game extends Scene {
       })
       .setOrigin(0.5);
 
-    // Click zones
-    this.leftZone = this.add
-      .zone(width * 0.25, height * 0.55, width * 0.5, height * 0.6)
-      .setInteractive({ useHandCursor: true })
-      .on('pointerdown', () => void this.handleGuess('left'));
-
-    this.rightZone = this.add
-      .zone(width * 0.75, height * 0.55, width * 0.5, height * 0.6)
-      .setInteractive({ useHandCursor: true })
-      .on('pointerdown', () => void this.handleGuess('right'));
-
-    // Hover highlights
-    const leftHighlight = this.add.rectangle(width * 0.25, height * 0.55, width * 0.48, height * 0.58, 0xffffff, 0).setDepth(-1);
-    const rightHighlight = this.add.rectangle(width * 0.75, height * 0.55, width * 0.48, height * 0.58, 0xffffff, 0).setDepth(-1);
-    this.leftZone
-      .on('pointerover', () => leftHighlight.setFillStyle(0xffffff, 0.05))
-      .on('pointerout', () => leftHighlight.setFillStyle(0xffffff, 0));
-    this.rightZone
-      .on('pointerover', () => rightHighlight.setFillStyle(0xffffff, 0.05))
-      .on('pointerout', () => rightHighlight.setFillStyle(0xffffff, 0));
-
-    // Feedback overlay (hidden)
     this.feedbackBg = this.add
       .rectangle(width / 2, height / 2, width, height, 0x000000, 0)
       .setVisible(false)
@@ -231,39 +186,152 @@ export class Game extends Scene {
       .setDepth(11);
   }
 
-  private async handleGuess(choice: 'left' | 'right'): Promise<void> {
-    if (this.answering || !this.questions) return;
-    this.answering = true;
+  private renderCurrentState(): void {
+    const location = this.getQuestionLocation(this.currentQuestion);
+    if (!location || !this.levels) return;
 
-    this.leftZone?.disableInteractive();
-    this.rightZone?.disableInteractive();
+    this.currentLevelIndex = location.levelIndex;
+    this.renderShapes(location);
+    this.updateQuestionText();
+    this.setInteractiveState(!this.answering);
+  }
+
+  private renderShapes(location: QuestionLocation): void {
+    this.clearLevelObjects();
+
+    const level = this.levels?.[location.levelIndex];
+    const question = level?.questions[location.questionIndex];
+    if (!level || !question) return;
+
+    const { width, height } = this.scale;
+    const shapeY = height * 0.52;
+    const shapes = question.shapes;
+    const shapeSize = this.getShapeSize(shapes.length, width, height);
+    const positions = this.getShapePositions(shapes.length, width);
+
+    shapes.forEach((shape, index) => {
+      const x = positions[index];
+      if (x === undefined) return;
+
+      const slot: ShapeSlot = {
+        highlight: this.add.rectangle(x, shapeY, shapeSize * 2.5, shapeSize * 2.5, 0xffffff, 0),
+        gfx: this.add.graphics(),
+        label: this.add
+          .text(x, shapeY + shapeSize + 18, shape.type.toUpperCase(), {
+            fontFamily: 'Arial Black',
+            fontSize: '14px',
+            color: '#cccccc',
+          })
+          .setOrigin(0.5),
+        zone: this.add.zone(x, shapeY, shapeSize * 2.6, shapeSize * 2.6),
+      };
+
+      slot.highlight.setDepth(-1);
+      slot.gfx.fillStyle(hexToNum(shape.color), 1);
+      drawShape(slot.gfx, shape.type, x, shapeY, shapeSize);
+
+      slot.zone
+        .setInteractive({ useHandCursor: true })
+        .on('pointerdown', () => void this.handleGuess(index))
+        .on('pointerover', () => slot.highlight.setFillStyle(0xffffff, 0.06))
+        .on('pointerout', () => slot.highlight.setFillStyle(0xffffff, 0));
+
+      this.shapeSlots.push(slot);
+    });
+  }
+
+  private clearLevelObjects(): void {
+    this.shapeSlots.forEach((slot) => {
+      slot.zone.destroy();
+      slot.highlight.destroy();
+      slot.gfx.destroy();
+      slot.label.destroy();
+    });
+    this.shapeSlots = [];
+  }
+
+  private getQuestionLocation(questionIndex: number): QuestionLocation | null {
+    if (!this.levels) return null;
+
+    let remaining = questionIndex;
+    for (let levelIndex = 0; levelIndex < this.levels.length; levelIndex++) {
+      const level = this.levels[levelIndex];
+      if (!level) continue;
+
+      const questionCount = level.questions.length;
+      if (remaining < questionCount) {
+        return { levelIndex, questionIndex: remaining };
+      }
+      remaining -= questionCount;
+    }
+
+    return null;
+  }
+
+  private updateQuestionText(): void {
+    const location = this.getQuestionLocation(this.currentQuestion);
+    if (!location || !this.levels) return;
+    const level = this.levels[location.levelIndex];
+    const question = level?.questions[location.questionIndex];
+    if (!level || !question) return;
+
+    this.questionText?.setText(question.label);
+    this.progressText?.setText(
+      `Question ${this.currentQuestion + 1} of ${TOTAL_QUESTIONS}  |  Level ${location.levelIndex + 1} of ${this.levels?.length ?? 0}`
+    );
+  }
+
+  private getShapeSize(shapeCount: number, width: number, height: number): number {
+    const base = Math.min(width * 0.09, height * 0.14, 78);
+    return Math.max(28, base - Math.max(0, shapeCount - 2) * 6);
+  }
+
+  private getShapePositions(shapeCount: number, width: number): number[] {
+    if (shapeCount === 1) return [width / 2];
+
+    const left = width * 0.14;
+    const right = width * 0.86;
+    const step = (right - left) / (shapeCount - 1);
+    return Array.from({ length: shapeCount }, (_, index) => left + step * index);
+  }
+
+  private setInteractiveState(enabled: boolean): void {
+    this.shapeSlots.forEach((slot) => {
+      if (enabled) {
+        slot.zone.setInteractive({ useHandCursor: true });
+      } else {
+        slot.zone.disableInteractive();
+      }
+    });
+  }
+
+  private async handleGuess(choiceIndex: number): Promise<void> {
+    if (this.answering || !this.levels) return;
+    this.answering = true;
+    this.setInteractiveState(false);
 
     try {
       const res = await fetch('/api/guess', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ questionIndex: this.currentQuestion, choice }),
+        body: JSON.stringify({ questionIndex: this.currentQuestion, choiceIndex }),
       });
       const data = (await res.json()) as GuessResponse;
-      this.score = data.score;
 
       this.showFeedback(data.correct, () => {
         if (data.done) {
           this.scene.start('GameOver', { score: data.score, streak: data.streak });
-        } else {
-          this.currentQuestion++;
-          this.questionText?.setText(this.questions![this.currentQuestion].label);
-          this.progressText?.setText(`Question ${this.currentQuestion + 1} of 3`);
-          this.leftZone?.setInteractive({ useHandCursor: true });
-          this.rightZone?.setInteractive({ useHandCursor: true });
-          this.answering = false;
+          return;
         }
+
+        this.currentQuestion++;
+        this.answering = false;
+        this.renderCurrentState();
       });
     } catch (e) {
       console.error('Guess error:', e);
       this.answering = false;
-      this.leftZone?.setInteractive({ useHandCursor: true });
-      this.rightZone?.setInteractive({ useHandCursor: true });
+      this.setInteractiveState(true);
     }
   }
 
@@ -274,7 +342,7 @@ export class Game extends Scene {
       .setFillStyle(correct ? 0x004400 : 0x440000, 0.85)
       .setVisible(true);
     this.feedbackText
-      .setText(correct ? '✓  Correct!' : '✗  Wrong!')
+      .setText(correct ? 'Correct!' : 'Wrong!')
       .setColor(correct ? '#00ff88' : '#ff4444')
       .setVisible(true);
 
@@ -285,33 +353,13 @@ export class Game extends Scene {
     });
   }
 
-  private showAlreadyPlayed(score: number): void {
-    const { width, height } = this.scale;
-    this.add
-      .text(width / 2, height * 0.3, "You've already played today!", {
-        fontFamily: 'Arial Black', fontSize: '28px', color: '#ffffff',
-        align: 'center', wordWrap: { width: width * 0.85 },
-      })
-      .setOrigin(0.5);
-    this.add
-      .text(width / 2, height * 0.48, `Your score: ${score}/3`, {
-        fontFamily: 'Arial Black', fontSize: '52px', color: '#ffd700',
-      })
-      .setOrigin(0.5);
-    this.add
-      .text(width / 2, height * 0.62, 'Come back tomorrow!', {
-        fontFamily: 'Arial', fontSize: '20px', color: '#aaaaaa',
-      })
-      .setOrigin(0.5);
-
-    this.time.delayedCall(3000, () => this.scene.start('MainMenu'));
-  }
-
   private showError(): void {
     const { width, height } = this.scale;
     this.add
       .text(width / 2, height / 2, 'Failed to load.\nPlease try again.', {
-        fontFamily: 'Arial Black', fontSize: '28px', color: '#ff4444',
+        fontFamily: 'Arial Black',
+        fontSize: '28px',
+        color: '#ff4444',
         align: 'center',
       })
       .setOrigin(0.5);

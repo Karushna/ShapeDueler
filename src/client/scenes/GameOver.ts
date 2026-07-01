@@ -1,5 +1,7 @@
-import { Scene, GameObjects } from 'phaser';
+import { Scene } from 'phaser';
 import * as Phaser from 'phaser';
+
+const TOTAL_QUESTIONS = 12;
 
 export class GameOver extends Scene {
   constructor() {
@@ -13,7 +15,6 @@ export class GameOver extends Scene {
     this.cameras.main.setBackgroundColor(0x0f0f1e);
     const { width, height } = this.scale;
 
-    // Title
     this.add
       .text(width / 2, height * 0.1, 'Daily Shape Dueler', {
         fontFamily: 'Arial Black',
@@ -22,8 +23,7 @@ export class GameOver extends Scene {
       })
       .setOrigin(0.5);
 
-    // Score
-    const scoreLabel = score === 3 ? 'Perfect!' : score === 0 ? 'Better luck tomorrow!' : 'Good try!';
+    const scoreLabel = score === TOTAL_QUESTIONS ? 'Perfect!' : score === 0 ? 'Better luck tomorrow!' : 'Good try!';
     this.add
       .text(width / 2, height * 0.24, scoreLabel, {
         fontFamily: 'Arial Black',
@@ -35,29 +35,34 @@ export class GameOver extends Scene {
       .setOrigin(0.5);
 
     this.add
-      .text(width / 2, height * 0.38, `${score}/3`, {
+      .text(width / 2, height * 0.38, `${score}/${TOTAL_QUESTIONS}`, {
         fontFamily: 'Arial Black',
         fontSize: '88px',
-        color: score === 3 ? '#ffd700' : score >= 2 ? '#f39c12' : '#e74c3c',
+        color: score === TOTAL_QUESTIONS ? '#ffd700' : score >= TOTAL_QUESTIONS / 2 ? '#f39c12' : '#e74c3c',
         stroke: '#000000',
         strokeThickness: 8,
       })
       .setOrigin(0.5);
 
-    // Score dots
-    const dotSpacing = 40;
-    const dotsStartX = width / 2 - dotSpacing;
-    for (let i = 0; i < 3; i++) {
+    const dotsPerRow = 6;
+    const dotSpacing = 30;
+    const topRowStartX = width / 2 - ((dotsPerRow - 1) * dotSpacing) / 2;
+    const bottomRowStartX = topRowStartX;
+
+    for (let i = 0; i < TOTAL_QUESTIONS; i++) {
       const filled = i < score;
+      const row = i < dotsPerRow ? 0 : 1;
+      const column = i % dotsPerRow;
+      const x = (row === 0 ? topRowStartX : bottomRowStartX) + column * dotSpacing;
+      const y = height * 0.52 + row * 28;
       const dot = this.add.graphics();
       dot.fillStyle(filled ? 0xffd700 : 0x444444, 1);
-      dot.fillCircle(dotsStartX + i * dotSpacing, height * 0.52, 10);
+      dot.fillCircle(x, y, 8);
     }
 
-    // Streak
     if (streak > 0) {
       this.add
-        .text(width / 2, height * 0.6, `🔥 ${streak}-day streak!`, {
+        .text(width / 2, height * 0.64, `${streak}-day streak!`, {
           fontFamily: 'Arial Black',
           fontSize: '24px',
           color: '#f39c12',
@@ -65,14 +70,15 @@ export class GameOver extends Scene {
         .setOrigin(0.5);
     }
 
-    // Share button
     const today = new Date().toLocaleDateString('en-US', {
-      month: 'short', day: 'numeric', year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
     });
-    const shareText = `Daily Shape Dueler — ${today}\nI got ${score}/3! ${streak > 0 ? `🔥 ${streak}-day streak!` : ''}\nPlay on Reddit!`;
+    const shareText = `Daily Shape Dueler - ${today}\nI got ${score}/${TOTAL_QUESTIONS}!${streak > 0 ? ` ${streak}-day streak!` : ''}\nPlay on Reddit!`;
 
     const shareBtn = this.add
-      .text(width / 2, height * 0.71, '📋  Copy Results', {
+      .text(width / 2, height * 0.75, 'Copy Results', {
         fontFamily: 'Arial Black',
         fontSize: '20px',
         color: '#ffffff',
@@ -86,15 +92,14 @@ export class GameOver extends Scene {
       .on('pointerdown', () => {
         if (navigator.clipboard) {
           void navigator.clipboard.writeText(shareText).then(() => {
-            shareBtn.setText('✓  Copied!');
-            this.time.delayedCall(2000, () => shareBtn.setText('📋  Copy Results'));
+            shareBtn.setText('Copied!');
+            this.time.delayedCall(2000, () => shareBtn.setText('Copy Results'));
           });
         }
       });
 
-    // Back to menu button
     const menuBtn = this.add
-      .text(width / 2, height * 0.83, '← Back to Menu', {
+      .text(width / 2, height * 0.85, 'Back to Menu', {
         fontFamily: 'Arial Black',
         fontSize: '20px',
         color: '#ffffff',

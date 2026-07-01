@@ -118,15 +118,6 @@ export class MainMenu extends Scene {
         this.streakText.setText(s > 0 ? `🔥 ${s}-day streak!` : 'No active streak — play today!');
       }
 
-      const today = new Date().toISOString().slice(0, 10);
-      if (this.statusText && streakRes.lastPlayed === today) {
-        this.statusText.setText('You already played today. Come back tomorrow!');
-        if (this.playButton) {
-          this.playButton.setAlpha(0.5).disableInteractive();
-          this.playButton.setText('Already Played Today');
-        }
-      }
-
       lbRes.entries.slice(0, 3).forEach((entry, i) => {
         const medal = ['🥇', '🥈', '🥉'][i];
         if (this.leaderboardTexts[i]) {

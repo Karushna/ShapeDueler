@@ -7,24 +7,33 @@ export type Shape = {
   color: string;
 };
 
+export const LEVEL_SHAPE_COUNTS = [2, 3, 4, 5] as const;
+export const QUESTIONS_PER_LEVEL = 3;
+export const TOTAL_QUESTIONS = LEVEL_SHAPE_COUNTS.length * QUESTIONS_PER_LEVEL;
+
 export type Question = {
   property: Property;
   label: string;
-  answer: 'left' | 'right';
+  answerIndex: number;
+  shapes: Shape[];
+};
+
+export type DailyLevel = {
+  questions: Question[];
 };
 
 export type DailyResponse = {
   type: 'daily';
-  shapes: [Shape, Shape];
-  questions: Question[];
+  levels: DailyLevel[];
   guessesUsed: number;
   score: number;
   alreadyPlayed: boolean;
+  totalQuestions: number;
 };
 
 export type GuessRequest = {
   questionIndex: number;
-  choice: 'left' | 'right';
+  choiceIndex: number;
 };
 
 export type GuessResponse = {

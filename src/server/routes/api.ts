@@ -8,6 +8,7 @@ import type {
   LeaderboardResponse,
   StreakResponse,
 } from '../../shared/api';
+import { TOTAL_QUESTIONS, QUESTIONS_PER_LEVEL } from '../../shared/api';
 import { getDailyData, getDateKey, getWeekKey } from '../core/daily';
 
 type ErrorResponse = { status: 'error'; message: string };
@@ -26,18 +27,23 @@ api.get('/daily', async (c) => {
   try {
     const daily = await getDailyData(date);
     const guessesRaw = await redis.get(`user:${username}:guesses:${date}`);
-    const guesses: boolean[] = guessesRaw ? (JSON.parse(guessesRaw) as boolean[]) : [];
-    const guessesUsed = guesses.length;
-    const scoreRaw = await redis.get(`user:${username}:score:${date}`);
-    const score = scoreRaw ? parseInt(scoreRaw) : 0;
+    let guesses: boolean[] = guessesRaw ? (JSON.parse(guessesRaw) as boolean[]) : [];
+    let score = parseInt((await redis.get(`user:${username}:score:${date}`)) ?? '0');
+
+    if (guesses.length >= TOTAL_QUESTIONS) {
+      guesses = [];
+      score = 0;
+      await redis.set(`user:${username}:guesses:${date}`, JSON.stringify([]));
+      await redis.set(`user:${username}:score:${date}`, '0');
+    }
 
     return c.json<DailyResponse>({
       type: 'daily',
-      shapes: daily.shapes,
-      questions: daily.questions,
-      guessesUsed,
+      levels: daily.levels,
+      guessesUsed: guesses.length,
       score,
-      alreadyPlayed: guessesUsed >= 3,
+      alreadyPlayed: false,
+      totalQuestions: TOTAL_QUESTIONS,
     });
   } catch (err) {
     console.error('GET /api/daily error:', err);
@@ -55,7 +61,7 @@ api.post('/guess', async (c) => {
   const date = getDateKey(new Date());
 
   const body = await c.req.json<GuessRequest>();
-  const { questionIndex, choice } = body;
+  const { questionIndex, choiceIndex } = body;
 
   const guessesRaw = await redis.get(`user:${username}:guesses:${date}`);
   const guesses: boolean[] = guessesRaw ? (JSON.parse(guessesRaw) as boolean[]) : [];
@@ -65,7 +71,15 @@ api.post('/guess', async (c) => {
   }
 
   const daily = await getDailyData(date);
-  const correct = daily.questions[questionIndex].answer === choice;
+  const levelIndex = Math.floor(questionIndex / QUESTIONS_PER_LEVEL);
+  const questionInLevel = questionIndex % QUESTIONS_PER_LEVEL;
+  const question = daily.levels[levelIndex]?.questions[questionInLevel];
+
+  if (!question) {
+    return c.json<ErrorResponse>({ status: 'error', message: 'Invalid question index' }, 400);
+  }
+
+  const correct = question.answerIndex === choiceIndex;
   guesses.push(correct);
   await redis.set(`user:${username}:guesses:${date}`, JSON.stringify(guesses));
 
@@ -74,7 +88,7 @@ api.post('/guess', async (c) => {
   if (correct) score += 1;
   await redis.set(`user:${username}:score:${date}`, String(score));
 
-  const done = guesses.length >= 3;
+  const done = guesses.length >= TOTAL_QUESTIONS;
   let streak = 0;
 
   if (done) {
