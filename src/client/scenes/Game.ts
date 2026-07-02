@@ -75,7 +75,6 @@ type QuestionLocation = {
 export class Game extends Scene {
   private levels: DailyResponse['levels'] | null = null;
   private currentQuestion = 0;
-  private currentLevelIndex = 0;
   private answering = false;
   private results: boolean[] = [];
 
@@ -93,7 +92,6 @@ export class Game extends Scene {
   init(): void {
     this.levels = null;
     this.currentQuestion = 0;
-    this.currentLevelIndex = 0;
     this.answering = false;
     this.results = [];
     this.questionText = null;
@@ -128,7 +126,6 @@ export class Game extends Scene {
 
       this.levels = data.levels;
       this.currentQuestion = data.guessesUsed;
-      this.currentLevelIndex = this.getQuestionLocation(this.currentQuestion)?.levelIndex ?? 0;
       this.buildUI();
       this.renderCurrentState();
       startBgMusic();
@@ -191,7 +188,6 @@ export class Game extends Scene {
     const location = this.getQuestionLocation(this.currentQuestion);
     if (!location || !this.levels) return;
 
-    this.currentLevelIndex = location.levelIndex;
     this.renderShapes(location);
     this.updateQuestionText();
     this.setInteractiveState(!this.answering);
@@ -414,7 +410,6 @@ export class Game extends Scene {
     const COLORS = [0x3498db, 0xf39c12, 0x9b59b6, 0xe74c3c];
     const COUNTS = ['2 Shapes', '3 Shapes', '4 Shapes', '5 Shapes'];
     const color  = COLORS[levelIndex] ?? 0xf39c12;
-    const hex    = '#' + color.toString(16).padStart(6, '0');
     const count  = COUNTS[levelIndex] ?? '';
     const D      = 60;
     const H      = 68; // banner height

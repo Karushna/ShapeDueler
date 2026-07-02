@@ -90,7 +90,7 @@ api.post('/guess', async (c) => {
   await redis.set(`user:${username}:score:${date}`, String(score));
 
   const done = guesses.length >= TOTAL_QUESTIONS;
-  let streak = 0;
+  let streak: number;
 
   if (done) {
     streak = await finalizeDay(username, date, score);
