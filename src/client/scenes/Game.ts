@@ -2,6 +2,7 @@ import { Scene, GameObjects } from 'phaser';
 import * as Phaser from 'phaser';
 import type { DailyResponse, GuessResponse, ShapeType } from '../../shared/api';
 import { TOTAL_QUESTIONS } from '../../shared/api';
+import { playSound } from '../sound';
 
 function hexToNum(hex: string): number {
   return parseInt(hex.replace('#', ''), 16);
@@ -200,31 +201,30 @@ export class Game extends Scene {
     if (!level || !question) return;
 
     const { width, height } = this.scale;
-    const shapeY = height * 0.52;
     const shapes = question.shapes;
     const shapeSize = this.getShapeSize(shapes.length, width, height);
-    const positions = this.getShapePositions(shapes.length, width);
+    const layout = this.getShapeLayout(shapes.length, width, height);
 
     shapes.forEach((shape, index) => {
-      const x = positions[index];
-      if (x === undefined) return;
+      const pos = layout[index];
+      if (!pos) return;
 
       const slot: ShapeSlot = {
-        highlight: this.add.rectangle(x, shapeY, shapeSize * 2.5, shapeSize * 2.5, 0xffffff, 0),
+        highlight: this.add.rectangle(pos.x, pos.y, shapeSize * 2.5, shapeSize * 2.5, 0xffffff, 0),
         gfx: this.add.graphics(),
         label: this.add
-          .text(x, shapeY + shapeSize + 18, shape.type.toUpperCase(), {
+          .text(pos.x, pos.y + shapeSize + 14, shape.type.toUpperCase(), {
             fontFamily: 'Arial Black',
             fontSize: '14px',
             color: '#cccccc',
           })
           .setOrigin(0.5),
-        zone: this.add.zone(x, shapeY, shapeSize * 2.6, shapeSize * 2.6),
+        zone: this.add.zone(pos.x, pos.y, shapeSize * 2.6, shapeSize * 2.6),
       };
 
       slot.highlight.setDepth(-1);
       slot.gfx.fillStyle(hexToNum(shape.color), 1);
-      drawShape(slot.gfx, shape.type, x, shapeY, shapeSize);
+      drawShape(slot.gfx, shape.type, pos.x, pos.y, shapeSize);
 
       slot.zone
         .setInteractive({ useHandCursor: true })
@@ -278,17 +278,52 @@ export class Game extends Scene {
   }
 
   private getShapeSize(shapeCount: number, width: number, height: number): number {
-    const base = Math.min(width * 0.09, height * 0.14, 78);
-    return Math.max(28, base - Math.max(0, shapeCount - 2) * 6);
+    switch (shapeCount) {
+      case 2: return Math.min(width * 0.14, height * 0.17, 95);
+      case 3: return Math.min(width * 0.11, height * 0.14, 80);
+      case 4: return Math.min(width * 0.11, height * 0.13, 72);
+      default: return Math.min(width * 0.10, height * 0.12, 64);
+    }
   }
 
-  private getShapePositions(shapeCount: number, width: number): number[] {
-    if (shapeCount === 1) return [width / 2];
+  private getShapeLayout(shapeCount: number, width: number, height: number): Array<{ x: number; y: number }> {
+    const centerY = height * 0.555;
+    const size = this.getShapeSize(shapeCount, width, height);
+    const rowSpacing = size * 2 + 50;
 
-    const left = width * 0.14;
-    const right = width * 0.86;
-    const step = (right - left) / (shapeCount - 1);
-    return Array.from({ length: shapeCount }, (_, index) => left + step * index);
+    if (shapeCount === 2) {
+      return [
+        { x: width * 0.27, y: centerY },
+        { x: width * 0.73, y: centerY },
+      ];
+    }
+    if (shapeCount === 3) {
+      return [
+        { x: width * 0.17, y: centerY },
+        { x: width * 0.50, y: centerY },
+        { x: width * 0.83, y: centerY },
+      ];
+    }
+    if (shapeCount === 4) {
+      const row1Y = centerY - rowSpacing / 2;
+      const row2Y = centerY + rowSpacing / 2;
+      return [
+        { x: width * 0.30, y: row1Y },
+        { x: width * 0.70, y: row1Y },
+        { x: width * 0.30, y: row2Y },
+        { x: width * 0.70, y: row2Y },
+      ];
+    }
+    // 5 shapes: 3 on top, 2 staggered below
+    const row1Y = centerY - rowSpacing / 2;
+    const row2Y = centerY + rowSpacing / 2;
+    return [
+      { x: width * 0.17, y: row1Y },
+      { x: width * 0.50, y: row1Y },
+      { x: width * 0.83, y: row1Y },
+      { x: width * 0.34, y: row2Y },
+      { x: width * 0.66, y: row2Y },
+    ];
   }
 
   private setInteractiveState(enabled: boolean): void {
@@ -314,13 +349,27 @@ export class Game extends Scene {
       });
       const data = (await res.json()) as GuessResponse;
 
+      if (data.done) {
+        playSound('complete');
+      } else if (data.correct) {
+        playSound('correct');
+      } else {
+        playSound('wrong');
+      }
+
       this.showFeedback(data.correct, () => {
         if (data.done) {
           this.scene.start('GameOver', { score: data.score, streak: data.streak });
           return;
         }
 
+        const prevLevel = this.getQuestionLocation(this.currentQuestion)?.levelIndex;
         this.currentQuestion++;
+        const newLevel = this.getQuestionLocation(this.currentQuestion)?.levelIndex;
+        if (newLevel !== undefined && prevLevel !== undefined && newLevel > prevLevel) {
+          playSound('levelup');
+        }
+
         this.answering = false;
         this.renderCurrentState();
       });
