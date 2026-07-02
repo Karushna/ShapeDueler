@@ -27,7 +27,7 @@ export class MainMenu extends Scene {
     const { width, height } = this.scale;
 
     this.titleText = this.add
-      .text(width / 2, height * 0.1, 'Daily Shape Dueler', {
+      .text(width / 2, height * 0.1, 'Shape Dueler', {
         fontFamily: 'Arial Black',
         fontSize: '36px',
         color: '#ffffff',

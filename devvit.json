@@ -1,6 +1,13 @@
 {
   "$schema": "https://developers.reddit.com/schema/config-file.v1.json",
   "name": "shapedueler",
+  "permissions": {
+    "redis": true,
+    "reddit": {
+      "enable": true,
+      "scope": "user"
+    }
+  },
   "post": {
     "dir": "dist/client",
     "entrypoints": {

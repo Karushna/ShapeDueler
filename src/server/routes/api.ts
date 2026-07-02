@@ -7,8 +7,9 @@ import type {
   LeaderboardEntry,
   LeaderboardResponse,
   StreakResponse,
+  ShareResponse,
 } from '../../shared/api';
-import { TOTAL_QUESTIONS, QUESTIONS_PER_LEVEL } from '../../shared/api';
+import { TOTAL_QUESTIONS, QUESTIONS_PER_LEVEL, LEVEL_SHAPE_COUNTS } from '../../shared/api';
 import { getDailyData, getDateKey, getWeekKey } from '../core/daily';
 
 type ErrorResponse = { status: 'error'; message: string };
@@ -161,6 +162,49 @@ api.get('/leaderboard', async (c) => {
     entries: entries.slice(0, 10),
     weekLabel,
   });
+});
+
+api.post('/share', async (c) => {
+  const { postId } = context;
+  if (!postId) {
+    return c.json<ErrorResponse>({ status: 'error', message: 'postId missing' }, 400);
+  }
+
+  const username = (await reddit.getCurrentUsername()) ?? 'anonymous';
+  const date = getDateKey(new Date());
+
+  const guessesRaw = await redis.get(`user:${username}:guesses:${date}`);
+  const guesses: boolean[] = guessesRaw ? (JSON.parse(guessesRaw) as boolean[]) : [];
+
+  if (guesses.length < TOTAL_QUESTIONS) {
+    return c.json<ErrorResponse>({ status: 'error', message: 'Game not complete' }, 400);
+  }
+
+  const score = parseInt((await redis.get(`user:${username}:score:${date}`)) ?? '0');
+  const streak = parseInt((await redis.get(`user:${username}:streak`)) ?? '0');
+
+  const today = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  const lines: string[] = [`📐 **Shape Dueler** — ${today}`, `Results for u/${username}:`, ''];
+
+  LEVEL_SHAPE_COUNTS.forEach((count, lvl) => {
+    const start = lvl * QUESTIONS_PER_LEVEL;
+    const emojis = guesses
+      .slice(start, start + QUESTIONS_PER_LEVEL)
+      .map((g) => (g ? '✅' : '❌'))
+      .join('');
+    lines.push(`Level ${lvl + 1} (${count} shapes): ${emojis}`);
+  });
+
+  lines.push('');
+  lines.push(`Score: ${score}/${TOTAL_QUESTIONS}${streak > 0 ? ` | 🔥 ${streak}-day streak` : ''}`);
+
+  try {
+    await reddit.submitComment({ id: postId, text: lines.join('\n'), runAs: 'APP' });
+    return c.json<ShareResponse>({ type: 'share', success: true });
+  } catch (err) {
+    console.error('Share error:', err);
+    return c.json<ErrorResponse>({ status: 'error', message: 'Failed to post comment' }, 500);
+  }
 });
 
 api.get('/streak', async (c) => {

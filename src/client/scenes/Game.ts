@@ -77,6 +77,7 @@ export class Game extends Scene {
   private currentQuestion = 0;
   private currentLevelIndex = 0;
   private answering = false;
+  private results: boolean[] = [];
 
   private questionText: GameObjects.Text | null = null;
   private progressText: GameObjects.Text | null = null;
@@ -94,6 +95,7 @@ export class Game extends Scene {
     this.currentQuestion = 0;
     this.currentLevelIndex = 0;
     this.answering = false;
+    this.results = [];
     this.questionText = null;
     this.progressText = null;
     this.feedbackBg = null;
@@ -351,6 +353,8 @@ export class Game extends Scene {
       });
       const data = (await res.json()) as GuessResponse;
 
+      this.results.push(data.correct);
+
       if (data.done) {
         stopBgMusic();
         playSound('complete');
@@ -362,7 +366,7 @@ export class Game extends Scene {
 
       this.showFeedback(data.correct, () => {
         if (data.done) {
-          this.scene.start('GameOver', { score: data.score, streak: data.streak });
+          this.scene.start('GameOver', { score: data.score, streak: data.streak, results: this.results });
           return;
         }
 

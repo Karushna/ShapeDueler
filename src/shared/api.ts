@@ -60,3 +60,8 @@ export type StreakResponse = {
   streak: number;
   lastPlayed: string;
 };
+
+export type ShareResponse = {
+  type: 'share';
+  success: boolean;
+};
