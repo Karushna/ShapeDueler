@@ -2,7 +2,7 @@ import { Scene, GameObjects } from 'phaser';
 import * as Phaser from 'phaser';
 import type { DailyResponse, GuessResponse, ShapeType } from '../../shared/api';
 import { TOTAL_QUESTIONS } from '../../shared/api';
-import { playSound } from '../sound';
+import { playSound, startBgMusic, stopBgMusic } from '../sound';
 
 function hexToNum(hex: string): number {
   return parseInt(hex.replace('#', ''), 16);
@@ -106,6 +106,7 @@ export class Game extends Scene {
     this.scale.on('resize', this.handleResize);
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
       this.scale.off('resize', this.handleResize);
+      stopBgMusic();
     });
     void this.loadDaily();
   }
@@ -128,6 +129,7 @@ export class Game extends Scene {
       this.currentLevelIndex = this.getQuestionLocation(this.currentQuestion)?.levelIndex ?? 0;
       this.buildUI();
       this.renderCurrentState();
+      startBgMusic();
     } catch (e) {
       console.error('Failed to load daily data:', e);
       this.showError();
@@ -350,6 +352,7 @@ export class Game extends Scene {
       const data = (await res.json()) as GuessResponse;
 
       if (data.done) {
+        stopBgMusic();
         playSound('complete');
       } else if (data.correct) {
         playSound('correct');
@@ -366,12 +369,16 @@ export class Game extends Scene {
         const prevLevel = this.getQuestionLocation(this.currentQuestion)?.levelIndex;
         this.currentQuestion++;
         const newLevel = this.getQuestionLocation(this.currentQuestion)?.levelIndex;
-        if (newLevel !== undefined && prevLevel !== undefined && newLevel > prevLevel) {
-          playSound('levelup');
-        }
 
-        this.answering = false;
-        this.renderCurrentState();
+        if (newLevel !== undefined && prevLevel !== undefined && newLevel > prevLevel) {
+          this.showLevelTransition(newLevel, () => {
+            this.answering = false;
+            this.renderCurrentState();
+          });
+        } else {
+          this.answering = false;
+          this.renderCurrentState();
+        }
       });
     } catch (e) {
       console.error('Guess error:', e);
@@ -395,6 +402,104 @@ export class Game extends Scene {
       this.feedbackBg?.setVisible(false);
       this.feedbackText?.setVisible(false);
       onDone();
+    });
+  }
+
+  private showLevelTransition(levelIndex: number, onComplete: () => void): void {
+    const { width, height } = this.scale;
+
+    const COLORS = [0x3498db, 0xf39c12, 0x9b59b6, 0xe74c3c];
+    const SHAPE_LABELS = ['2 SHAPES', '3 SHAPES', '4 SHAPES', '5 SHAPES'];
+    const color = COLORS[levelIndex] ?? 0xf39c12;
+    const colorHex = '#' + color.toString(16).padStart(6, '0');
+    const shapeLabel = SHAPE_LABELS[levelIndex] ?? '3 SHAPES';
+    const D = 50; // depth — above all game objects
+
+    const objs: Phaser.GameObjects.GameObject[] = [];
+
+    // Full-screen dark overlay
+    const overlay = this.add.rectangle(width / 2, height / 2, width, height, 0x050510, 0).setDepth(D);
+    objs.push(overlay);
+
+    // Horizontal accent bar that stretches from centre outward
+    const bar = this.add.rectangle(width / 2, height / 2, width * 0.78, 5, color, 1)
+      .setScaleX(0).setDepth(D + 1);
+    objs.push(bar);
+
+    // "LEVEL X" — pops in from small with overshoot
+    const levelText = this.add
+      .text(width / 2, height / 2 - 52, `LEVEL ${levelIndex + 1}`, {
+        fontFamily: 'Arial Black',
+        fontSize: '76px',
+        color: colorHex,
+        stroke: '#000000',
+        strokeThickness: 10,
+        align: 'center',
+      })
+      .setOrigin(0.5).setAlpha(0).setScale(0.4).setDepth(D + 2);
+    objs.push(levelText);
+
+    // Shape-count subtitle — slides up into position
+    const shapeText = this.add
+      .text(width / 2, height / 2 + 90, shapeLabel, {
+        fontFamily: 'Arial Black',
+        fontSize: '26px',
+        color: '#ffffff',
+        stroke: '#000000',
+        strokeThickness: 5,
+        align: 'center',
+      })
+      .setOrigin(0.5).setAlpha(0).setDepth(D + 2);
+    objs.push(shapeText);
+
+    // Level-progress dots (4 levels shown as dots)
+    const dotGap = 26;
+    const dotsStartX = width / 2 - (1.5 * dotGap);
+    for (let i = 0; i < 4; i++) {
+      const active = i <= levelIndex;
+      const dot = this.add
+        .circle(dotsStartX + i * dotGap, height / 2 + 132, active ? 8 : 5, active ? color : 0x333355, active ? 1 : 0.4)
+        .setAlpha(0).setDepth(D + 2);
+      objs.push(dot);
+      this.tweens.add({ targets: dot, alpha: 1, delay: 390 + i * 65, duration: 160 });
+    }
+
+    const cleanup = (): void => objs.forEach((o) => o.destroy());
+
+    // ── Animation chain ──────────────────────────────────────────────────────
+    // 1. Overlay fades in (160 ms)
+    this.tweens.add({
+      targets: overlay, alpha: 0.92, duration: 160, ease: 'Power1',
+      onComplete: () => {
+        // 2. Accent bar stretches across (200 ms)
+        this.tweens.add({
+          targets: bar, scaleX: 1, duration: 200, ease: 'Power2',
+          onComplete: () => {
+            // 3. Level text pops in with bounce overshoot (300 ms)
+            playSound('levelup');
+            this.tweens.add({
+              targets: levelText, alpha: 1, scaleX: 1, scaleY: 1,
+              duration: 300, ease: 'Back.easeOut',
+              onComplete: () => {
+                // 4. Shape label slides up (220 ms)
+                this.tweens.add({
+                  targets: shapeText, alpha: 1, y: height / 2 + 30,
+                  duration: 220, ease: 'Power2',
+                  onComplete: () => {
+                    // 5. Hold 750 ms, then fade everything out (280 ms)
+                    this.time.delayedCall(750, () => {
+                      this.tweens.add({
+                        targets: objs, alpha: 0, duration: 280, ease: 'Power1',
+                        onComplete: () => { cleanup(); onComplete(); },
+                      });
+                    });
+                  },
+                });
+              },
+            });
+          },
+        });
+      },
     });
   }
 
